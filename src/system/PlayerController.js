@@ -1,42 +1,13 @@
 'use strict';
-import {Melon, assets, _} from 'externals';
-import Controls from 'system/Controls';
-import Sound from 'system/Sound';
-import Movement from 'system/physics/Movement';
+import {Melon, _, config} from 'externals';
 import Debug from 'system/Debug';
-
-let createAnimation = function (frames) {
-  if (frames.length === 1) {
-    // no delay needed
-    return frames;
-  }
-
-  let animation = [];
-  frames.forEach(function (frame) {
-    if (frame.name) { // e.g. {name:7, delay: 100}
-      animation.push(frame);
-    } else if (_.isArray(frame) && (frame.length >= 2)) { // e.g. [7, 100]
-      animation.push({
-        name: frame[0],
-        delay: frame[1]
-      });
-    } else { // e.g. 7
-      animation.push({
-        name: frame,
-        delay: Movement.fps + (Movement.fps / Movement.velocity)
-      });
-    }
-  });
-  return animation;
-};
+import GridSnapMovement from 'system/physics/GridSnapMovement';
 
 let PlayerController = Melon.Entity.extend({
   initProperties() {
     this.defaultSettings = {
       anchorPoint: new Melon.Vector2d(0, 0)
     };
-    this.remainingPixels = 0;
-    this.lastPressedButton = null;
 
     // Define an animation per desired button e.g. animationType_buttonName
     this.animations = {
@@ -61,170 +32,107 @@ let PlayerController = Melon.Entity.extend({
 
     this._super(Melon.Entity, 'init', [x, y, settings]);
 
+    this.currentDt = 0;
+
+    this.movement = new GridSnapMovement(this.body, {
+      spriteWidth: config.video.tile_size,
+      distancePerMove: config.video.tile_size,
+      speed: config.player.speed
+    });
+
     // Register sprite animations
     _.forOwn(this.animations, (animation, animationName) => {
       if (animation.frames.length === 0) {
         return;
       }
 
-      this.renderable.addAnimation(animationName, createAnimation(animation.frames));
+      this.renderable.addAnimation(animationName, this.buildAnimation(
+        this.movement.fps + (this.movement.fps / this.movement.velocity),
+        animation.frames
+      ));
     });
 
     // set a standing animation as default
     this.renderable.setCurrentAnimation(this.initialAnimation);
 
-    // set the default horizontal & vertical speed (accel vector)
-    this.body.vel.set(0, 0);
-    this.body.maxVel.set(Movement.velocity, Movement.velocity);
-    this.body.accel.set(0, 0);
-    this.body.friction.set(0, 0);
-
-    //  do not fall
-    this.body.gravity = 0;
-    this.body.jumping = false;
-    this.body.falling = false;
-
     // Set the sprite anchor point
     this.anchorPoint.set(settings.anchorPoint.x, settings.anchorPoint.y);
 
-    // ensure the player is updated even when outside of the viewport
-    this.alwaysUpdate = true;
+    // Assign callbacks to the movement events
+    this.movement.onStop = this.onPlayerStop.bind(this);
+    this.movement.onIdle = this.onPlayerIdle.bind(this);
+    this.movement.onMove = this.onPlayerMove.bind(this);
 
     // set the display to follow our position on both axis
     Melon.game.viewport.follow(this.pos, Melon.game.viewport.AXIS.BOTH);
+
+    // ensure the player is updated even when outside of the viewport
+    this.alwaysUpdate = true;
+  },
+
+  onPlayerIdle() {
+    Debug.debugUpdate(this.movement, this.currentDt);
+
+    this.body.update(this.currentDt);
+
+    this._super(Melon.Entity, 'update', [this.currentDt]);
+  },
+
+  onPlayerMove() {
+    Debug.debugUpdate(this.movement, this.currentDt);
+
+    // apply physics to the body (this moves the entity)
+    this.body.update(this.currentDt);
+
+    this._super(Melon.Entity, 'update', [this.currentDt]);
+
+    // handle collisions against other shapes
+    Melon.collision.check(this);
+  },
+
+  onPlayerStop(lastDirection) {
+    this.renderable.setCurrentAnimation(`stand_${lastDirection.toLowerCase()}`);
+
+    if (Debug.enabled) {
+      // Show debug animation after 1s
+      if (this.debugTimeout) {
+        clearTimeout(this.debugTimeout);
+      }
+      this.debugTimeout = setTimeout(() => {
+        this.renderable.setCurrentAnimation('debug');
+      }, 1000);
+    }
+  },
+
+  /**
+   *
+   * Collision handler
+   * (called when colliding with other objects)
+   * @param {me.collision.ResponseObject.prototype} collisionResponse
+   * @param {me.Entity|me.Renderable} collisionObject
+   * @returns {boolean} Return false to avoid collision, return true or nothing to collide.
+   */
+  onPlayerCollide(collisionResponse, collisionObject) {
+    // To be implemented by children
   },
 
   /**
    * update the entity
    */
-  update(deltaTime) {
-    if (!this.isMoving()) {
-      this.body.vel.x = 0;
-      this.body.vel.y = 0;
+  update(dt) {
+    this.currentDt = dt;
 
-      if (this.lastPressedButton) {
-        this.renderable.setCurrentAnimation(`stand_${this.lastPressedButton.toLowerCase()}`);
-        if (Debug.enabled) {
-          if (this.debugTimeout) {
-            clearTimeout(this.debugTimeout);
-          }
-          this.debugTimeout = setTimeout(() => {
-            this.renderable.setCurrentAnimation('debug');
-          }, 1000);
-        }
-      }
+    let updated = this.movement.update();
 
-      this.lastPressedButton = null;
+    if (!updated) {
+      return this._super(Melon.Entity, 'update', [dt]);
     }
 
-    let direction = this.getMoveDirection();
-
-    if (!direction && !this.isMoving()) {
-      // No action and no pending animation
-      Debug.debugUpdate('-', deltaTime, 0, 0);
-      return this._super(Melon.Entity, 'update', [deltaTime]);
-    }
-
-    if (direction && !this.lastPressedButton) {
-      // Assign last button
-      this.lastPressedButton = direction;
-    }
-
-    if (direction && !this.isMoving()) {
-      // New move
-      this.remainingPixels = Movement.distancePerMove;
-    }
-
-    let velocity = 0;
-
-    if (direction && ((velocity = this.getVelocity()) !== 0)) {
-      // velocity = velocity * deltaTime;
-      this.move(direction, velocity);
-    }
-
-    Debug.debugUpdate(direction, deltaTime, this.remainingPixels, velocity);
-
-    // ---------------------------------------------------------------------------------------------------------
     // apply physics to the body (this moves the entity)
-    this.body.update(deltaTime);
-
-    // handle collisions against other shapes
-    Melon.collision.check(this);
+    this.body.update(dt);
 
     // return true if we moved or if the renderable was updated
-    return (this._super(Melon.Entity, 'update', [deltaTime]) || this.hasVelocity());
-  },
-
-  move(pressedButton, velocity) {
-    if (!pressedButton || isNaN(velocity)) {
-      return false;
-    }
-
-    let axis = Controls.getPressedAxis(pressedButton);
-
-    if (!axis) {
-      return false;
-    }
-
-    let oppositeAxis = Controls.getPressedOppositeAxis(axis);
-
-    // Disable diagonal movement
-    this.body.vel[oppositeAxis] = 0;
-
-    if (pressedButton === Controls.LEFT || pressedButton === Controls.UP) {
-      this.body.vel[axis] -= velocity;
-    } else {
-      this.body.vel[axis] += velocity;
-    }
-
-    // change to the walking animation
-    if (!this.renderable.isCurrentAnimation(`walk_${pressedButton.toLowerCase()}`)) {
-      this.renderable.setCurrentAnimation(`walk_${pressedButton.toLowerCase()}`);
-    }
-
-    return this.hasVelocity();
-  },
-
-  /**
-   * @returns {(Integer|boolean)}
-   */
-  getVelocity() {
-    if (this.remainingPixels >= Movement.velocity) {
-      // Move with constant velocity
-      this.remainingPixels -= Movement.velocity;
-      return Movement.velocity;
-    } else if (this.remainingPixels !== 0 && this.remainingPixels < Movement.velocity) {
-      // Move with remaining pixels
-      let vel = this.remainingPixels;
-      this.remainingPixels = 0;
-      return vel;
-    }
-
-    // Do not move
-    return 0;
-  },
-
-  isMoving() {
-    return (this.remainingPixels > 0);
-  },
-
-  hasVelocity() {
-    return (this.body.vel.x !== 0 || this.body.vel.y !== 0);
-  },
-
-  getMoveDirection() {
-    // todo: calc quick/long press
-
-    if (this.isMoving() && this.lastPressedButton) {
-      return this.lastPressedButton;
-    }
-
-    let pressedButton = Controls.getPressed();
-    if (pressedButton && (Controls.getPressedAxis(pressedButton) !== false)) {
-      return pressedButton;
-    }
-
-    return false;
+    return (this._super(Melon.Entity, 'update', [dt]) || this.movement.hasVelocity());
   },
 
   /**
@@ -236,32 +144,44 @@ let PlayerController = Melon.Entity.extend({
    * @returns {boolean} Return false to avoid collision, return true or nothing to collide.
    */
   onCollision(collisionResponse, collisionObject) {
-    if (collisionResponse.overlap === 0) {
+    let cancelled = (this.body.onStaticCollision(collisionResponse, collisionObject) === false);
+
+    if (!cancelled) {
+      cancelled = (this.onPlayerCollide(collisionResponse, collisionObject) === false);
+    }
+
+    if (cancelled) {
       return false;
     }
 
-    collisionResponse.a.body.gravity = 0;
-    collisionResponse.b.body.accel.set(0, 0);
-    collisionResponse.a.body.friction.set(0, 0);
-    collisionResponse.a.body.jumping = false;
-    collisionResponse.a.body.falling = false;
-
-    collisionResponse.b.body.gravity = 0;
-    collisionResponse.b.body.accel.set(0, 0);
-    collisionResponse.b.body.friction.set(0, 0);
-    collisionResponse.b.body.jumping = false;
-    collisionResponse.b.body.falling = false;
-
-    collisionObject.body.gravity = 0;
-    collisionObject.body.accel.set(0, 0);
-    collisionObject.body.friction.set(0, 0);
-    collisionObject.body.jumping = false;
-    collisionObject.body.falling = false;
-
-    Sound.playEffect(assets.audios.collide);
-
     Debug.debugCollision(collisionResponse);
   },
+
+  buildAnimation(delay, frames) {
+    if (frames.length === 1) {
+      // no delay needed
+      return frames;
+    }
+
+    let animation = [];
+    frames.forEach(function (frame) {
+      if (frame.name) { // e.g. {name:7, delay: 100}
+        animation.push(frame);
+      } else if (_.isArray(frame) && (frame.length >= 2)) { // e.g. [7, 100]
+        animation.push({
+          name: frame[0],
+          delay: frame[1]
+        });
+      } else { // e.g. 7
+        animation.push({
+          name: frame,
+          delay: delay
+        });
+      }
+    });
+    return animation;
+  }
+
 });
 
 export default PlayerController;

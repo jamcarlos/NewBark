@@ -1,7 +1,6 @@
 'use strict';
 import {Melon, $, _, config} from 'externals';
 import Events from 'system/Events';
-import Movement from 'system/physics/Movement';
 
 export default {
   get enabled() {
@@ -33,7 +32,7 @@ export default {
 
     if (this.enabled) {
       // Melon.debug.renderHitBox = true; // TODO: check the utility of this
-      this.debugUpdate('-', '-', 0, 0);
+      this.debugUpdate(null);
     }
 
     // Show/hide debug elements on level load, depending on current debug mode
@@ -95,20 +94,25 @@ export default {
     this.element.html(this.format(data));
   },
 
-  debugUpdate(direction, deltaTime, remainingPixels, deltaVelocity = null) {
+  /**
+   *
+   * @param {GridSnapMovement.prototype} movementObject
+   * @param {float} deltaTime
+   */
+  debugUpdate(movementObject, deltaTime) {
     if (!this.enabled) {
       return;
     }
 
     this.debug({
-      'FPS': Movement.fps,
-      'Delta Time': deltaTime,
-      'Velocity (pixels per frame)': Movement.velocity,
-      'Distance (pixels per move)': Movement.distancePerMove,
-      'Distance (current move)': remainingPixels,
-      'Velocity (current move)': !isNaN(deltaVelocity) ? deltaVelocity : 0,
+      'FPS': Melon.sys.fps,
+      'Delta Time': deltaTime ? deltaTime : '-',
+      'Velocity (pixels per frame)': movementObject ? movementObject.velocity : '-',
+      'Distance (pixels per move)': movementObject ? movementObject.distancePerMove : '-',
+      'Distance (current move)': movementObject ? movementObject.buffer : '-',
+      'Velocity (current move)': movementObject ? movementObject.lastVelocity : '-',
       'Last Collision': '-',
-      'Direction': direction
+      'Direction': movementObject ? (movementObject.lastDirection ? movementObject.lastDirection : '-') : '-'
     });
   },
 

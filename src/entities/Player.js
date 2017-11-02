@@ -1,6 +1,7 @@
 'use strict';
 import PlayerController from 'system/PlayerController';
-import {Melon} from 'externals';
+import {Melon, assets} from 'externals';
+import Sound from 'system/Sound';
 
 /**
  * Main player entity
@@ -40,4 +41,8 @@ export default PlayerController.extend({
 
     Melon.$game.player = this;
   },
+
+  onPlayerCollide() {
+    Sound.playEffect(assets.audios.collide);
+  }
 });
