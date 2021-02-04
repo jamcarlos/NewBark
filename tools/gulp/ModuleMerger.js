@@ -62,7 +62,7 @@ module.exports = function (includePath, destinationFile) {
         if (module.name === destinationFile.replace(/\..*$/, '')) {
           return;
         }
-        code += `import ${module.name} from '${module.src}';\n`;
+        code += `import ${module.name} from '${module.src.replace('\\', '/')}';\n`;
 
         code_exports_default.push(`  ${module.name}: ` + module.name);
         code_exports.push('  ' + module.name);
